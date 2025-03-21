@@ -17,165 +17,150 @@ function getCookie(cname) {
   return "";
 }
 
-// 取得 DOM 元素
-const video1 = document.getElementById('inputVideo');
-const inputtext = document.getElementById('inputtext');
-const inputtextUser = document.getElementById('inputtextUser');
-const mask = document.getElementById('mask');
-const loadImg = document.getElementById('loadImg');
-const startBtn = document.getElementById('startRecognition');
+// DOM 載入完成後執行
+document.addEventListener('DOMContentLoaded', () => {
+  // 取得 DOM 元素
+  const video1 = document.getElementById('inputVideo');
+  const inputtext = document.getElementById('inputtext');
+  const inputtextUser = document.getElementById('inputtextUser');
+  const mask = document.getElementById('mask');
+  const loadImg = document.getElementById('loadImg');
 
-// 檢查並更新 Cookie
-function checkCookie() {
-  let key = getCookie("key");
-  let name = getCookie("name");
-  if (key) inputtext.value = key;
-  if (name) inputtextUser.value = name;
+  // 檢查並更新 Cookie
+  function checkCookie() {
+    let key = getCookie("key");
+    let name = getCookie("name");
+    if (key) inputtext.value = key;
+    if (name) inputtextUser.value = name;
 
-  if (inputtext.value !== key) setCookie("key", inputtext.value, 30);
-  if (inputtextUser.value !== name) setCookie("name", inputtextUser.value, 30);
-}
+    if (inputtext.value !== key) setCookie("key", inputtext.value, 30);
+    if (inputtextUser.value !== name) setCookie("name", inputtextUser.value, 30);
+  }
 
-// 取得人名列表
-let labelStr = getCookie("labelStr") || "black,robobo";
-labelStr = prompt("請輸入名稱並以逗號隔開人名:", labelStr);
-let labels = labelStr.split(",");
+  // 取得人名列表
+  let labelStr = getCookie("labelStr") || "black,robobo";
+  labelStr = prompt("請輸入名稱並以逗號隔開人名:", labelStr);
+  let labels = labelStr.split(",");
 
-// 圓角輸入框
-$('input:text').addClass("ui-widget ui-widget-content ui-corner-all ui-textfield");
+  // 圓角輸入框
+  $('input:text').addClass("ui-widget ui-widget-content ui-corner-all ui-textfield");
 
-// MQTT 客戶端設置
-const mqttClient = mqtt.connect('wss://io.adafruit.com:443/mqtt', {
-  username: inputtextUser.value || '',
-  password: inputtext.value || '',
-  clientId: 'web_client_' + Math.random().toString(16).substr(2, 8)
-});
+  // 載入模型並啟動攝影機
+  Promise.all([
+    mask.style.display = "block",
+    loadImg.style.display = "block",
+    faceapi.nets.ssdMobilenetv1.loadFromUri('./models'),
+    faceapi.nets.faceRecognitionNet.loadFromUri('./models'),
+    faceapi.nets.faceLandmark68Net.loadFromUri('./models'),
+    console.log("模型載入成功"),
+    checkCookie()
+  ]).then(() => startVideo(video1, mask, loadImg)).catch(err => console.error("初始化失敗:", err));
 
-mqttClient.on('connect', () => console.log('MQTT 連接成功'));
-mqttClient.on('error', (err) => console.log('MQTT 錯誤:', err));
-mqttClient.on('message', (topic, message) => {
-  console.log(`收到訊息 - Topic: ${topic}, Message: ${message.toString()}`);
-});
+  async function startVideo(video, mask, loadImg) {
+    if (!video) {
+      console.error("Video element not found");
+      return;
+    }
+    await navigator.mediaDevices.getUserMedia({ video: {} })
+      .then(stream => {
+        video.srcObject = stream;
+      })
+      .catch(err => console.error("攝影機啟動失敗:", err));
+    await video.play();
+    recognizeFacesContinuously(video, mask, loadImg);
+  }
 
-// 載入模型
-let labeledDescriptors;
-let faceMatcher;
-let canvas;
-let displaySize;
-let recognitionInterval;
+  let labeledDescriptors;
+  let faceMatcher;
+  let canvas;
+  let displaySize;
 
-Promise.all([
-  mask.style.display = "block",
-  loadImg.style.display = "block",
-  faceapi.nets.ssdMobilenetv1.loadFromUri('./models'),
-  faceapi.nets.faceRecognitionNet.loadFromUri('./models'),
-  faceapi.nets.faceLandmark68Net.loadFromUri('./models'),
-  console.log("模型載入成功"),
-  checkCookie()
-]).then(() => {
-  mask.style.display = "none";
-  loadImg.style.display = "none";
-  startBtn.addEventListener('click', startRecognition);
-});
+  async function recognizeFacesContinuously(video, mask, loadImg) {
+    if (!video) return;
 
-async function startRecognition() {
-  console.log("開始辨識");
-  // 如果正在辨識，先停止
-  if (recognitionInterval) stopRecognition();
-
-  const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
-  video1.srcObject = stream;
-  await video1.play();
-
-  if (!labeledDescriptors) {
     labeledDescriptors = await loadLabel();
     faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.7);
-  }
-  canvas = faceapi.createCanvasFromMedia(video1);
-  document.body.append(canvas);
-  canvas.style.left = getPosition(video1)["x"] + "px";
-  canvas.style.top = getPosition(video1)["y"] + "px";
-  displaySize = { width: video1.offsetWidth, height: video1.offsetHeight };
-  faceapi.matchDimensions(canvas, displaySize);
+    canvas = faceapi.createCanvasFromMedia(video);
+    if (!canvas) {
+      console.error("無法創建 Canvas");
+      return;
+    }
+    document.body.append(canvas);
+    mask.style.display = "none";
+    loadImg.style.display = "none";
 
-  let latestResult = "unknown";
-  recognitionInterval = setInterval(async () => {
-    if (!canvas) return; // 若 canvas 不存在，直接退出
-    displaySize = { width: video1.offsetWidth, height: video1.offsetHeight };
+    canvas.style.left = getPosition(video)["x"] + "px";
+    canvas.style.top = getPosition(video)["y"] + "px";
+    displaySize = { width: video.offsetWidth, height: video.offsetHeight };
     faceapi.matchDimensions(canvas, displaySize);
 
-    const detections = await faceapi.detectAllFaces(video1)
-      .withFaceLandmarks()
-      .withFaceDescriptors();
-    const resizedDetections = faceapi.resizeResults(detections, displaySize);
-    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    let lastUpload = new Date().getTime() - 2000;
+    setInterval(async () => {
+      if (!canvas || !video) return; // 防止 canvas 或 video 為 null
+      inputtext.style.width = video.offsetWidth + "px";
+      inputtext.style.height = (video.offsetHeight / 8) + "px";
+      inputtextUser.style.width = video.offsetWidth + "px";
+      inputtextUser.style.height = (video.offsetHeight / 8) + "px";
+      displaySize = { width: video.offsetWidth, height: video.offsetHeight };
+      faceapi.matchDimensions(canvas, displaySize);
 
-    const results = resizedDetections.map(d => faceMatcher.findBestMatch(d.descriptor));
-    results.forEach((result, i) => {
-      const box = resizedDetections[i].detection.box;
-      const drawBox = new faceapi.draw.DrawBox(box, { label: result.toString() });
-      drawBox.draw(canvas);
-      latestResult = result.label;
-    });
-  }, 100);
+      const detections = await faceapi.detectAllFaces(video)
+        .withFaceLandmarks()
+        .withFaceDescriptors();
+      const resizedDetections = faceapi.resizeResults(detections, displaySize);
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  setTimeout(() => {
-    stopRecognition();
-    console.log("5秒結束，最新結果:", latestResult);
-    if (inputtextUser.value && inputtext.value) {
-      const topic = `${inputtextUser.value}/feeds/face`;
-      console.log("上傳至:", topic);
-      mqttClient.publish(topic, latestResult, {}, (err) => {
-        if (!err) console.log(`MQTT 上傳 ${latestResult} 至 ${topic}`);
-        else console.log("MQTT 上傳失敗:", err);
-      });
-    } else {
-      console.log("使用者名稱或金鑰未填寫");
-    }
-  }, 5000);
-}
+      const results = resizedDetections.map(d => faceMatcher.findBestMatch(d.descriptor));
+      results.forEach((result, i) => {
+        const box = resizedDetections[i].detection.box;
+        const drawBox = new faceapi.draw.DrawBox(box, { label: result.toString() });
+        drawBox.draw(canvas);
 
-function stopRecognition() {
-  if (recognitionInterval) {
-    clearInterval(recognitionInterval);
-    recognitionInterval = null;
-  }
-  if (video1.srcObject) {
-    video1.srcObject.getTracks().forEach(track => track.stop());
-    video1.srcObject = null;
-  }
-  if (canvas) {
-    canvas.remove();
-    canvas = null;
-  }
-}
-
-async function loadLabel() {
-  return Promise.all(
-    labels.map(async (label) => {
-      const descriptions = [];
-      for (let i = 1; i <= 4; i++) {
-        try {
-          const img = await faceapi.fetchImage(`images/${label}/${i}.jpg`);
-          const detections = await faceapi.detectSingleFace(img).withFaceLandmarks().withFaceDescriptor();
-          if (detections) descriptions.push(detections.descriptor);
-          else alert(`無法提取 ${label}/${i}.jpg 的人臉特徵`);
-        } catch (e) {
-          console.log(`錯誤於 ${label}/${i}.jpg: ${e}`);
+        const currentTime = new Date().getTime();
+        if (currentTime - lastUpload >= 2000) {
+          $.ajax({
+            url: `https://io.adafruit.com/api/v2/${inputtextUser.value}/feeds/face/data?X-AIO-Key=${inputtext.value}`,
+            type: "POST",
+            data: { "value": result.label },
+            success: () => console.log(`Uploaded ${result.label} to Adafruit IO`),
+            error: (err) => console.log("Upload failed:", err)
+          });
+          lastUpload = currentTime;
         }
-      }
-      if (descriptions.length > 0) setCookie("labelStr", labelStr, 30);
-      return new faceapi.LabeledFaceDescriptors(label, descriptions);
-    })
-  );
-}
+      });
 
-function getPosition(element) {
-  let x = 0, y = 0;
-  while (element) {
-    x += element.offsetLeft - element.scrollLeft + element.clientLeft;
-    y += element.offsetTop - element.scrollLeft + element.clientTop;
-    element = element.offsetParent;
+      checkCookie();
+    }, 100);
   }
-  return { x: x, y: y };
-}
+
+  async function loadLabel() {
+    return Promise.all(
+      labels.map(async (label) => {
+        const descriptions = [];
+        for (let i = 1; i <= 4; i++) {
+          try {
+            const img = await faceapi.fetchImage(`images/${label}/${i}.jpg`);
+            const detections = await faceapi.detectSingleFace(img).withFaceLandmarks().withFaceDescriptor();
+            if (detections) descriptions.push(detections.descriptor);
+            else alert(`無法提取 ${label}/${i}.jpg 的人臉特徵`);
+          } catch (e) {
+            console.log(`錯誤於 ${label}/${i}.jpg: ${e}`);
+          }
+        }
+        if (descriptions.length > 0) setCookie("labelStr", labelStr, 30);
+        return new faceapi.LabeledFaceDescriptors(label, descriptions);
+      })
+    );
+  }
+
+  function getPosition(element) {
+    let x = 0, y = 0;
+    while (element) {
+      x += element.offsetLeft - element.scrollLeft + element.clientLeft;
+      y += element.offsetTop - element.scrollLeft + element.clientTop;
+      element = element.offsetParent;
+    }
+    return { x: x, y: y };
+  }
+});
