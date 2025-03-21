@@ -62,20 +62,12 @@
       text-align: center;
     }
 
-    #startRecognition {
-      font-size: 4vh;
-      margin: 1vh 0;
-      padding: 5px;
-      width: 90%;
-    }
-
     .ui-textfield {
       text-align: center;
     }
   </style>
   <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
   <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script> <!-- 添加 MQTT.js -->
   <script defer src="face-api.min.js"></script>
   <script defer src="script.js"></script>
 </head>
@@ -87,6 +79,5 @@
   <video id="inputVideo" muted playsinline></video>
   <input id="inputtextUser" type="text" placeholder="請輸入 AIO 使用者名稱">
   <input id="inputtext" type="text" placeholder="請輸入 AIO 金鑰">
-  <button id="startRecognition">開始辨識</button>
 </body>
 </html>
