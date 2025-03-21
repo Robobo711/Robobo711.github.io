@@ -19,8 +19,8 @@ function getCookie(cname) {
 
 // 取得 DOM 元素
 const video1 = document.getElementById('inputVideo');
-const inputtext = document.getElementById('inputtext'); // Adafruit IO Key
-const inputtextUser = document.getElementById('inputtextUser'); // Adafruit IO Username
+const inputtext = document.getElementById('inputtext');
+const inputtextUser = document.getElementById('inputtextUser');
 const mask = document.getElementById('mask');
 const loadImg = document.getElementById('loadImg');
 const startBtn = document.getElementById('startRecognition');
@@ -44,15 +44,18 @@ let labels = labelStr.split(",");
 // 圓角輸入框
 $('input:text').addClass("ui-widget ui-widget-content ui-corner-all ui-textfield");
 
-// MQTT 客戶端設置（使用 Adafruit IO MQTT）
+// MQTT 客戶端設置
 const mqttClient = mqtt.connect('wss://io.adafruit.com:443/mqtt', {
-  username: inputtextUser.value,
-  password: inputtext.value,
+  username: inputtextUser.value || '',
+  password: inputtext.value || '',
   clientId: 'web_client_' + Math.random().toString(16).substr(2, 8)
 });
 
 mqttClient.on('connect', () => console.log('MQTT 連接成功'));
 mqttClient.on('error', (err) => console.log('MQTT 錯誤:', err));
+mqttClient.on('message', (topic, message) => {
+  console.log(`收到訊息 - Topic: ${topic}, Message: ${message.toString()}`);
+});
 
 // 載入模型
 let labeledDescriptors;
@@ -76,12 +79,14 @@ Promise.all([
 });
 
 async function startRecognition() {
-  // 啟動攝影機
+  console.log("開始辨識");
+  // 如果正在辨識，先停止
+  if (recognitionInterval) stopRecognition();
+
   const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
   video1.srcObject = stream;
   await video1.play();
 
-  // 初始化人臉辨識
   if (!labeledDescriptors) {
     labeledDescriptors = await loadLabel();
     faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.7);
@@ -93,9 +98,9 @@ async function startRecognition() {
   displaySize = { width: video1.offsetWidth, height: video1.offsetHeight };
   faceapi.matchDimensions(canvas, displaySize);
 
-  // 開始持續辨識
   let latestResult = "unknown";
   recognitionInterval = setInterval(async () => {
+    if (!canvas) return; // 若 canvas 不存在，直接退出
     displaySize = { width: video1.offsetWidth, height: video1.offsetHeight };
     faceapi.matchDimensions(canvas, displaySize);
 
@@ -110,25 +115,31 @@ async function startRecognition() {
       const box = resizedDetections[i].detection.box;
       const drawBox = new faceapi.draw.DrawBox(box, { label: result.toString() });
       drawBox.draw(canvas);
-      latestResult = result.label; // 更新最新辨識結果
+      latestResult = result.label;
     });
   }, 100);
 
-  // 5 秒後上傳並停止
   setTimeout(() => {
     stopRecognition();
+    console.log("5秒結束，最新結果:", latestResult);
     if (inputtextUser.value && inputtext.value) {
       const topic = `${inputtextUser.value}/feeds/face`;
+      console.log("上傳至:", topic);
       mqttClient.publish(topic, latestResult, {}, (err) => {
         if (!err) console.log(`MQTT 上傳 ${latestResult} 至 ${topic}`);
         else console.log("MQTT 上傳失敗:", err);
       });
+    } else {
+      console.log("使用者名稱或金鑰未填寫");
     }
   }, 5000);
 }
 
 function stopRecognition() {
-  clearInterval(recognitionInterval);
+  if (recognitionInterval) {
+    clearInterval(recognitionInterval);
+    recognitionInterval = null;
+  }
   if (video1.srcObject) {
     video1.srcObject.getTracks().forEach(track => track.stop());
     video1.srcObject = null;
